@@ -1,0 +1,156 @@
+---
+title: "GEE DSM regression in R"
+author: "Trevan Flynn"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load libraries needed
+```{r load}
+library(sf)
+library(tidyverse)
+library(yardstick)
+library(ggpubr)
+library(rgee)
+ee_Initialize()
+```
+
+labels response and scales (will be used later) and load boundaries
+
+```{r labels}
+#labels
+label = "phaq_val_1" #response (how it is in the database)
+scale = 30 #resolution of output
+tileScale = 4 #factor to reduce region of computation (0-16)
+
+#Get Otjozondjupa province in Namibia
+worldProvince = ee$FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level1"); #admin 
+filterProvince = ee$Filter$eq('ADM1_NAME', 'Otjozondjupa'); #select province
+region = worldProvince$filter(filterProvince); #filter to area
+
+#load WoSIS data of pH (point observations)
+collection = ee$FeatureCollection("users/trevanflynn/WoSIS_pH")$
+  select(label)$#select pH (response)
+  filterBounds(region)$ #clip to region
+  filter(ee$Filter$lt(label, 10))#remove outlier (one sample is above 10)
+
+#check data
+Map$centerObject(region, 6)
+Map$addLayer(collection)
+```
+Create covariate image (climatic data - 19 bioclim variables at www.worldclim.org) and sample data from WoSIS collection. Similar to extract in terra or stars package. We then add x and y to add neighboorhood covariates.
+
+If image collection is made to represent the scorpan factors, convert to an image with ImageCollection$toBands(). This is common in some datasets and is usually needed when collecting covariates.
+
+```{r covariates}
+#image  = coStack$toBands()
+#get worldclim biovariables (already in image format)
+coStack = ee$Image("WORLDCLIM/V1/BIO")$#get climate data
+  clip(region)$#clip to region
+  addBands(ee$Image$pixelLonLat())#add x and y as covariates
+
+#resample at resolution desired
+coStack = coStack$
+  reproject(crs = "EPSG: 3857", scale = scale)$ #sample to 30 m
+  resample(mode = 'bicubic') #set resampling mode
+
+#sample covariates at observations
+samples = coStack$sampleRegions(
+  collection = collection, #collection with response
+  properties = list(label),
+  scale = scale,
+  geometries = T)$
+  randomColumn() #add random column for making training/test set
+
+#split data
+training = samples$filter(ee$Filter$gt('random',0.2)) # 80% training
+validation = samples$filter(ee$Filter$lte('random',0.2)) # 20% testing
+
+#predictor variable names
+bands = coStack$bandNames()
+```
+
+Regression classifier, must build the model and and set the mode to "REGRESSION" before training the model. For gradient tree boosting (GTB) you only need to specify number of trees to grow. 
+
+Default values for GTB:
+  -shrinkage = 0.005 (lower = less over fitting but slower)
+  -samplingRate = 0.7 (bag fraction for each tree)
+  -maxNodes = Inf (max nodes in each tree)
+  -loss = "LeastAbsoluteDeviation" (objective function)
+  -seed = 0 (replicate results)
+  
+```{r model}
+#build and train
+rfReg= ee$Classifier$smileGradientTreeBoost( #model
+  numberOfTrees = 500, #500 trees
+  shrinkage = 0.1)$#higher shrinkage = lower time needed (overfits easier)
+  setOutputMode("REGRESSION")$ #(default = classification)
+  train(features = training,
+        classProperty = label,
+        inputProperties = bands)
+
+#predict trained RF model over covariate image
+pHmap = coStack$classify(rfReg, "predictions")
+
+#plot results
+Map$centerObject(region, 6)#center map 
+Map$addLayer(pHmap, list(min = 7, max = 9, palette = c("blue", "red", "yellow", "green", "grey")))
+```
+
+Evaluate predictions (easiest to convert to sf if small area)
+
+```{r evaluate}
+#set metrics (a bunch in the yardstick library), example shown for common DSM metics
+met = metric_set(ccc, rsq, rmse)#lins coefficient, R2 and RMSE 
+
+#predict and convert to sf object
+eval = validation$classify(rfReg, "predictions")$ #predict
+  select(label, "predictions")%>% #select response and predictions (lower computation)
+  ee_as_sf() #convert
+
+#print results
+eval %>%
+  met(phaq_val_1, predictions)
+
+#plot reg line and other stats
+#R2 and regline plot
+ggplot(data = eval, aes(y = phaq_val_1, x = predictions))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = F)+
+  stat_cor(label.y= 9.5, aes(label = after_stat(rr.label)))+
+  stat_regline_equation(label.y = 9)+
+  labs(x = "Predictions", y = "Measured", title = "pH")+
+  theme_bw()
+
+#covariate importance for top 10
+varImp = rfReg$explain()$get("importance")$getInfo()%>% #get importance
+  as_tibble()%>%#make tibble
+  pivot_longer(cols = c(1:ncol(.)))%>% #long df for plotting
+  arrange(desc(value))%>% #sort decreasing values
+  slice(1:10) #get top 10
+
+#plot
+ggplot(data = varImp, aes(x = reorder(name, -value), y = value))+
+  geom_bar(stat ="identity", color = 'black', fill = 'blue')+
+  labs(x = "Variable", y = "Importance", title = "Covariate importance")+
+  theme_bw()
+```
+To save or for further analysis, convert to stars object or export to google drive. Converting to stars will save and load into memory but can take a long time
+
+```{r save, echo=F}
+#Export
+task = ee_image_to_drive(
+  image = pHmap,
+  description = "RegMap", #name of image
+  folder = "rgee_backup", #folder to store in 
+  scale = scale
+)
+
+task
+#to send to GEE use - task$start()
+##END
+```

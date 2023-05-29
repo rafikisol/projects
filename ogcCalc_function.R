@@ -5,7 +5,7 @@
 #Description: Function to create Oblique geographic coordinates (OGC) in R from 
 #a Feature/FeatureCollection (or shapefile convered to ee$Object) with Google Earth Engine. 
 #This function is basically all taken from Anders Bjørn Møller and was developed 
-#in Møller et al 2020. Therefore, their paper should be sited. 
+#in Møller et al., (2020). Therefore, their paper should be cited if this code is used. 
 #
 #This code consists of two function both of which require rgee package installed. The first 
 #function calculates x and y from a region (xyImage) and the second calculates the OGC (ogcCalc) image.

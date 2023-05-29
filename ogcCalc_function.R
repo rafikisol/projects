@@ -83,9 +83,9 @@ ogcCalc = function(xyImg, nr = 6){
     toBands()
   
   #add xy back in (otherwise names will be wrong)
-  ogc = img$select(0)$ #longitude
+  ogc = xyImg$select(0)$ #longitude
     addBands(ogc)$ #calculated image
-    addBands(img$select(1))$ #latitude
+    addBands(xyImg$select(1))$ #latitude
     rename(labs)
   
   return(ogc)

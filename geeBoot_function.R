@@ -15,39 +15,31 @@
         #[[2]] = model of each bootstrap
         #[[3]] = samples from each bootstrap
 
----
-#geeBoot() function:
-geeBoot = function(image, model = 'gtb',sType = "s", sampNum = 100, boot = 10,...){
+##geeBoot() function:
+#function
+geeBoot = function(image, model = 'rf', sType = 'r', sampNum = 100, boot = 10,...){
   
   #labels of lists (we want them all)
   samps = list()
-  mods = list()
-  preds = list()
   
   #define which model 
-  if(model == "rf"){
-    model = ee$Classifier$smileRandomForest
-  }
-  
-  if(model == "gtb"){
-    model = ee$Classifier$smileGradientTreeBoost
-  }
-  
-  if(model == "svm"){
-    model = ee$Classifier$libsvm
-  }
-  
-  if(model == "cart"){
-    model = ee$Classifier$smileCart
-  }
-  
   if(model == "nb"){
     model = ee$Classifier$smileNaiveBayes
+  }
+  if(model == "gtb"){
+      model = ee$Classifier$smileGradientTreeBoost
+  }
+  if(model == "svm"){
+        model = ee$Classifier$libsvm
+  }
+  if(model == "cart"){
+          model = ee$Classifier$smileCart
+  }
+  else{model = ee$Classifier$smileRandomForest
   }
   
   #loop around
   for(i in 1:boot) {
-    
     #stratified samples
     if(sType == "s"){
       samps[[i]] = image$stratifiedSample(
@@ -57,37 +49,36 @@ geeBoot = function(image, model = 'gtb',sType = "s", sampNum = 100, boot = 10,..
         geometries = T,
         scale = scale)
     }
-    
     #random sampling
-    if(sType == "r"){
+    else{
       samps[[i]] = image$sample(
         region = region,
         scale = scale,
         numPixels = sampNum,
         geometries = T)
     }
-    
-    #train models on each bootstap
-    mods[[i]] = model(...)$
-      train(features = samps[[i]],
-            classProperty = label,
-            inputProperties = colabs)
-    
-    #predict each model over covariate
-    preds[[i]] = image$classify(mods[[i]], "pred")
-    
-    #get mode of the imageCollection
-    predModal = ee$ImageCollection(preds)$
-      mode()
   }
+  
+  #function to build classifier and traing
+  f1 = function(x) {model(...)$
+      train(features = x,
+            classProperty = label,
+            inputProperties = colabs)}
+  mods = lapply(samps, f1)
+  
+  #predict each model over covariate
+  f2 = function(mods) image$classify(mods, "predictions")
+  preds = lapply(mods, f2)
+    
+  #get mode of the imageCollection
+  predModal = ee$ImageCollection(preds)$
+    mode()
   
   #names list for ease of use
   return(list(predModal, mods, samps)%>%
            setNames(c("predictions", "models", "samples")))
 }
-
-#apply function
-preds = geeBoot(image, model = 'gtb', sampNum = 50, numberOfTrees = 50)
+#END
 
 #REFERENCES
 

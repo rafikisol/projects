@@ -1,0 +1,46 @@
+#'@title impCalc() function
+#'
+#'@description 
+#' Code to get the average variable importance from a gootstrapped model in GEE. It requires a list of models
+#' and the amount of covariates to be displayed.
+#'@param models Is the results from the function geeBoot.
+#'@param n Is the number of covariates to display.
+#'@return A list of 1) a ggplot2 bar plot and 2) results of importance in a tibble. 
+#function to calculate importance and plot
+impCalc = function(models, n){
+  
+  #extract models
+  x = models[["models"]]
+  
+  #function to get importance
+  f1 = function(x){x$explain()$get("importance")$getInfo()%>%#get info
+      as_tibble()%>% #make tibble
+      pivot_longer(cols = c(1:ncol(.)))%>% #long df
+      arrange(desc(value))%>% #sort decreasing values
+      slice(1:n)
+  }
+  
+  #apply function and calculate average
+  imp = lapply(x, f1)%>%
+    bind_rows()%>% #bind rows
+    group_by(name)%>%
+    mutate(meanImp = mean(value))%>% #calculate by group
+    distinct(name, meanImp) #get only unique values#get 10 covariates
+    
+  
+  #add a ggplot of results
+  p = ggplot(data = imp, aes(y = meanImp, x= reorder(name, -meanImp)))+
+    geom_bar(stat = "identity", fill = 'blue', color = 'black', lwd = 1)+
+    labs(x = "Covariate", y = "Importance")+
+    theme_bw()
+  
+  #return and set names
+  return(list(p, imp)%>%
+           setNames(c("plot", "importance")))
+}
+
+#apply function
+coImp = impCalc(models = preds, n = 10)
+
+#plot results
+coImp[["plot"]]
